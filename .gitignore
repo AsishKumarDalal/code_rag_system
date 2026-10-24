@@ -1,0 +1,46 @@
+# ── secrets / credentials (never commit) ─────────────────────────────────
+.env
+.env.*
+*.secret
+secrets.json
+*kaggle*.json
+.kaggle/
+
+# ── python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# ── jupyter / kaggle runners ──────────────────────────────────────────────
+.ipynb_checkpoints/
+*.log
+
+# ── data pipelines: everything these scripts produce/download (HF is ground truth)
+_stage0_fetch/
+_stage1_extract/
+/tmp/
+data/docs/
+data/shards/
+data/manifest.json*
+data/cpt/
+data/rag/
+*.bin
+*.part[mn0-9]*
+*.tmp
+.tar.gz.tmp
+
+# ── big files: banks live on HF, not in git ────────────────────────────────
+*.tar.gz
+*.7z
+*.zip
+*.parquet
+*.jsonl.gz
+*.bz2
+
+# ── misc ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
