@@ -113,9 +113,9 @@ PUBLISHED_TOKENS = {                    # source taxonomy sizes for audit sanity
     "wikimedia": 15.8e9, "arxiv_papers": 6.0e9, "replay": 15e12,
 }
 EVAL_SETS = [                            # decontamination surfaces (fail-soft)
-    dict(ids=["openai/openai_humaneval", "openai_humaneval"], split="test"),
-    dict(ids=["mbpp", "google-research-datasets/mbpp"],       split="test"),
-    dict(ids=["openai/gsm8k", "gsm8k"],                      split="test"),
+    dict(ids=["openai/openai_humaneval"],                split="test"),
+    dict(ids=["google-research-datasets/mbpp"],          split="test"),
+    dict(ids=["openai/gsm8k"],                           split="test", cfg="main"),
 ]
 TEXT_FIELD_HINTS = ["text", "content", "body", "code", "prompt", "passage"]
 SKIP_DECON = os.environ.get("SKIP_DECON", "0") == "1"
@@ -270,7 +270,7 @@ M = dict(kind="cpt_prep", version=1, created=now(),
          timings={})
 
 def fresh_src(key, **kw):
-    d = M["sources"].setdefault(key, dict(done=False, rows_scanned=0, tokens_got=0,
+    d = M["sources"].setdefault(key, dict(done=False, pilot=False, rows_scanned=0, tokens_got=0,
         spans_kept=0, dedup_skipped=0, decon_skipped=0, short_skipped=0,
         parse_skipped=0, error=None,
         timing=dict(select_h=0.0)))
@@ -388,6 +388,7 @@ def build_grams():
     if SKIP_DECON:
         log("decon: SKIPPED via SKIP_DECON=1 (not recommended)")
         return None
+    M["evals"]["loaded"], M["evals"]["failed"] = [], []   # fresh lists — never inherit
     from datasets import load_dataset
     grams, hasher = set(), hashlib.blake2b
     add = grams.add
@@ -403,16 +404,19 @@ def build_grams():
         got = False
         for name in ev["ids"]:
             try:
-                d = load_dataset(name, split=ev["split"])
+                d = (load_dataset(name, ev["cfg"], split=ev["split"])
+                     if ev.get("cfg") else load_dataset(name, split=ev["split"]))
                 for row in d:
                     grams_of(" ".join(str(v) for v in row.values() if isinstance(v, str)).split())
                     pb.update(1)
                     if len(grams) > 4_000_000: break
-                M["evals"]["loaded"].append(name); got = True; break
+                if name not in M["evals"]["loaded"]: M["evals"]["loaded"].append(name)
+                got = True; break
             except Exception as e:
                 log(f"   eval load failed {name} ({str(e)[:70]}) → trying next")
         if not got:
             M["evals"]["failed"].append(ev["ids"][0])
+            M["evals"]["failed"] = list(dict.fromkeys(M["evals"]["failed"]))
     if grams:
         # canary: matcher must rediscover gram windows of a known eval doc
         try:
@@ -480,7 +484,12 @@ def select_source(key, quota, cap):
     """stream → audit gate → tokenize → decon → dedup → windows → span files."""
     s = fresh_src(key)
     if s["done"]:
-        log(f"select:{key} skipped (done, {s['tokens_got']:,} tok)"); return True
+        if s.get("pilot") and not PILOT:          # bug-fix: pilot 'done' must not block the full run
+            s["done"] = False; s["pilot"] = False
+            log(f"select:{key} re-opening — its done-flag came from a pilot pass "
+                f"({s['tokens_got']:,} tok); continuing to the full quota")
+        else:
+            log(f"select:{key} skipped (done, {s['tokens_got']:,} tok)"); return True
     if PILOT: quota = min(quota, PILOT)
     if not audit_source(key):
         log(f"❌ {key} blocked by audit — source skipped this run"); return False
@@ -537,7 +546,7 @@ def select_source(key, quota, cap):
                     log(f"❌ {key} aborted — rerun resumes from row {s['rows_scanned']:,}")
                     break
         else:
-            s["done"] = True
+            s["done"] = True; s["pilot"] = bool(PILOT)   # full-run 'done' is the only real one
         s["timing"]["select_h"] = round((time.time() - t0) / 3600, 3)
         log(f"   {key}: {s['tokens_got']:,} tok · spans {s['spans_kept']:,} · "
             f"dedup {s['dedup_skipped']:,} · decon {s['decon_skipped']:,} · "
@@ -584,6 +593,8 @@ def pack_all(tree):
     PREFIX = "c" + hashlib.blake2b(fp_raw, digest_size=4).hexdigest()
     PK["fp"] = PREFIX
     PK["shards"] = {}                                  # fresh ledger each pack
+    PK["blocks_total"] = 0                             # fresh recompute — never inherit
+    PK["uploaded_blocks"] = 0
     records, per_src = [], {}
     for si, key in enumerate(srcs):
         per_src[si] = open(TMP_DIR / f"spans_{key}.bin", "rb")
@@ -662,9 +673,10 @@ def pack_all(tree):
     for p in DATA_DIR.glob(f"{PREFIX}_block_*.bin"):   # drop empty leftovers
         if p.stat().st_size == 0: p.unlink()
     pb.close()
-    # disk hygiene: blocks are banked on HF → free span intermediates
-    # (keeps the session well under Kaggle's quotas in every phase)
-    if not incomplete and not PILOT:
+    un_up = [n for n, v in PK["shards"].items() if not v["uploaded"]]
+    # disk hygiene: only clean up when EVERYTHING is banked on HF — otherwise
+    # the span files stay so a rerun can retry the missing uploads
+    if not incomplete and not PILOT and PK["shards"] and not un_up:
         freed = 0
         for p in TMP_DIR.glob("*"):
             try:
@@ -674,6 +686,9 @@ def pack_all(tree):
                 pass
         PK["finalized"] = True
         log(f"cleanup: span intermediates freed {gfmt(freed)} (pack finalized)")
+    elif not PILOT:
+        log(f"⚠ kept span files ({len(un_up)} shard(s) not yet uploaded) — "
+            f"rerun retries those uploads (and selection if needed)")
     M["timings"]["pack_s"] = round(time.time() - T0, 1)
     save_manifest()
     log(f"pack: {PK['blocks_total']:,} blocks · "
@@ -713,6 +728,9 @@ def main():
                     default=int(os.environ.get("CPT_PILOT", "0")),
                     help=">0 caps each source's tokens (quick test run); "
                          "or set env CPT_PILOT=200000")
+    ap.add_argument("--reselect", action="store_true",
+                    help="clear pilot-poisoned done-flags & pack state "
+                         "(row offsets + dedup prefix are kept)")
     a = ap.parse_args()
     global PILOT
     PILOT = a.pilot
@@ -731,7 +749,15 @@ def main():
         fresh_src(k)
     global TREE
     TREE = repo_tree()
-    log(f"plan: {sum(M['quotas'].values())/1e6:.0f}M tokens from {len(SOURCES)} source(s)")
+    log("plan: %dM tokens from %d source(s)" % (
+        sum(M["quotas"].values()) / 1e6, len(SOURCES)))
+    if a.reselect or os.environ.get("CPT_RESELECT") == "1":
+        for (r, k, q, c) in SOURCES:
+            fresh_src(k, done=False, pilot=False, error=None)
+        M["pack"]["finalized"] = False
+        save_manifest()
+        log("reselect: done-flags cleared (row offsets kept) — selection will "
+            "continue to full quotas")
     _SHA.update(M.get("dedup_prefix", []))
     # ① audit
     for (_r, k, *_rest) in SOURCES:
