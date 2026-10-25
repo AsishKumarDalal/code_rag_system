@@ -106,6 +106,8 @@ DATA_SUB    = "data/cpt"                         # same folder the prep banks to
 CKPT_SUB    = "ckpt/cpt"                         # hourly checkpoints
 SHIP_SUB    = "models/cpt.v1"                    # final merged weights
 BASE        = "Qwen/Qwen3-4B"                    # the one lineage (per phase plan)
+TARGETS     = ["q_proj", "k_proj", "v_proj", "o_proj",     # explicit, version-proof
+               "gate_proj", "up_proj", "down_proj"]        # (peft "all-linear"
 SEED        = 3407                               # pinned → identical everything
 BLOCK       = 4096                               # tokens/block (from prep)
 EPOCHS_TPU  = 3                                  # TPU budget (900M token passes)
@@ -296,6 +298,17 @@ def load_manifest():
     return m, tree, usable, blk
 
 # ═══════════════════════════ model (base + LoRA adapter) ══════════════════════
+def _check_wrapped(model, n_linear):
+    """peft attachments must be real; 'all-linear' once silently wrapped 0."""
+    wrapped = [n for n, _ in model.named_modules()
+               if "lora_A" in n or "lora_B" in n]
+    if not wrapped:
+        log(f"❌ peft wrapped 0 modules ({n_linear} Linear found) — "
+            "target names did not match this model")
+        raise SystemExit(1)
+    log(f"peft: {len(wrapped)} lora matrices on {n_linear} Linear layers")
+
+
 def build_model(rank):
     from peft import LoraConfig, get_peft_model
     attn = ARGS.attn
@@ -304,10 +317,12 @@ def build_model(rank):
         model = AutoModelForCausalLM.from_pretrained(
             BASE, torch_dtype=torch.bfloat16, attn_implementation=attn)
         model.config.use_cache = False
+        n_lin = sum(1 for m in model.modules() if isinstance(m, torch.nn.Linear))
         cfg = LoraConfig(r=rank, lora_alpha=rank * 2, lora_dropout=0.05,
-                         target_modules="all-linear", bias="none",
+                         target_modules=list(TARGETS), bias="none",
                          task_type="CAUSAL_LM")
         model = get_peft_model(model, cfg)
+        _check_wrapped(model, n_lin)
         model = model.to(DEV)
         for p in model.parameters():        # bf16 adapters → fits the 16GB cores
             if p.requires_grad: p.data = p.data.to(torch.bfloat16)
@@ -322,10 +337,13 @@ def build_model(rank):
             BASE, quantization_config=bnb, device_map={"": 0},
             attn_implementation=attn)
         model.config.use_cache = False
+        n_lin = sum(1 for m in model.modules() if isinstance(m, torch.nn.Linear)
+                    or m.__class__.__name__.endswith("4bit"))
         cfg = LoraConfig(r=rank, lora_alpha=rank * 2, lora_dropout=0.05,
-                         target_modules="all-linear", bias="none",
+                         target_modules=list(TARGETS), bias="none",
                          task_type="CAUSAL_LM")
         model = get_peft_model(model, cfg)
+        _check_wrapped(model, n_lin)
         from peft import prepare_model_for_kbit_training
         model = prepare_model_for_kbit_training(model,
                                                 use_gradient_checkpointing=True)
@@ -579,6 +597,11 @@ def resume_load(model, optim, sched, nam, meta, stream, blk):
 # ═══════════════════════════ optimizer + scheduler ════════════════════════════
 def build_optim(model):
     ps = [p for p in model.parameters() if p.requires_grad]
+    if not ps:
+        lora_n = sum(1 for n, _ in model.named_modules() if "lora_" in n)
+        log(f"❌ optimizer got 0 trainable params · lora modules {lora_n} · "
+            "quitting so it fails loudly here, not later")
+        raise SystemExit(1)
     opt = torch.optim.AdamW(ps, lr=LR_PEAK, betas=(0.9, 0.95), eps=1e-8,
                             weight_decay=0.01)
     sched = torch.optim.lr_scheduler.LambdaLR(
