@@ -278,7 +278,9 @@ def load_manifest():
         log("   → run  %run data/cpt_prep.py  first (it banks the manifest)")
         raise SystemExit(1)
     tree = repo_tree()
-    names = sorted(m["pack"].get("shards", {}), key=lambda s: int(s.split("_")[1]))
+    def _blk_no(name):
+        return int(name.split("_")[-1].split(".")[0])   # "<fp>_block_000N.bin"
+    names = sorted(m["pack"].get("shards", {}), key=_blk_no)
     usable, blk = [], {n: int(m["pack"]["shards"][n]["blocks"]) for n in names}
     for name in names:
         on_repo = tree.get(f"{DATA_SUB}/{name}")
