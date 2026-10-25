@@ -174,17 +174,34 @@ def bar(desc, total=None, unit="it", scale=False):
 
 # ── HF plumbing ───────────────────────────────────────────────────────────────
 _API = None
+def get_token():
+    """HF token, env-first: os env → Kaggle secret → Colab secret → stored login."""
+    t = os.environ.get("HF_TOKEN", "")
+    if t: return t
+    try:
+        from kaggle_secrets import UserSecretsClient
+        t = UserSecretsClient().get_secret("HF_TOKEN")
+        if t:
+            os.environ["HF_TOKEN"] = t
+            log("token: loaded from Kaggle Secrets")
+            return t
+    except Exception:
+        pass
+    try:
+        from google.colab import userdata
+        t = userdata.get("HF_TOKEN")          # Kaggle-grey code path: wraps fine
+        if t:
+            os.environ["HF_TOKEN"] = t
+            log("token: loaded from Colab userdata")
+            return t
+    except Exception:
+        pass
+    return ""
+
 def api():
     global _API
     if _API is None:
-        tok = HF_TOKEN or os.environ.get("KAGGLE_SECRET_HF_TOKEN", "")
-        if not tok:   # Kaggle-only convenience: auto-pull the attached secret
-            try:
-                from kaggle_secrets import UserSecretsClient
-                tok = UserSecretsClient().get_secret("HF_TOKEN")
-                os.environ["HF_TOKEN"] = tok
-            except Exception:
-                pass
+        tok = HF_TOKEN or get_token() or os.environ.get("KAGGLE_SECRET_HF_TOKEN", "")
         if tok:
             try:
                 from huggingface_hub import login
