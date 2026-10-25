@@ -331,7 +331,6 @@ def textfield_from_row(row):
     if not isinstance(row, dict):
         return None, []
     cands = [k for k, v in row.items() if isinstance(v, str) and len(v) > MIN_ROW_CHR]
-    rich = [k for k, v in row.items() if isinstance(v, str)]
     for hint in TEXT_FIELD_HINTS:                   # domain-known names win
         if hint in cands: return hint, list(row.keys())
     if cands: return max(cands, key=lambda k: len(row[k])), list(row.keys())
@@ -361,7 +360,7 @@ def audit_source(key):
     log(f"→ audit {repo}")
     try:
         it = iter(load_raw(key))                    # unshuffled fast probe
-        hashes, total = set(), 0
+        hashes = set()
         with bar(f"audit {key}", AUDIT_ROWS) as pb:
             for row in it:
                 field, cols = textfield_from_row(row)

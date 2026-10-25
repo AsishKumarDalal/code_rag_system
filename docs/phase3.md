@@ -342,4 +342,78 @@ six *_filtered repos (+ fineweb-edu replay)
 
 ---
 
+## 24. Runbook — Kaggle TPU v5e-8 (free)
+
+**One-time setup.** Add-ons → Secrets → add `HF_TOKEN` (write scope), attach it to the notebook. In the notebook:
+
+```python
+%cd /kaggle/working/code_rag
+# %run data/cpt_train.py --libs          # optional: versions only
+%run data/cpt_train.py --pilot 60        # 60-step smoke test + save/reload proof
+```
+
+On a TPU runtime the cell **auto-relaunches as a plain `python` process**; that is
+required because `xmp.spawn` cannot pickle code defined in `%run`. Logs keep
+streaming into the cell.
+
+**What the pilot should show, in order**
+
+```
+libs: … torch … transformers … peft … torch_xla …
+model: pre-downloading Qwen/Qwen3-4B …          # once, shared by all 8 cores
+TPU: spawning one process per core (data-parallel) …
+backend: TPU · world 8 · rank 0 · bf16
+model: Qwen/Qwen3-4B · bf16 · attn sdpa → xla:0 …
+peft: 504 lora matrices on 252 Linear layers
+requires_grad rewired · trainable ~264M (lora-only)
+[rank N] init sha1 <same for all 8>             # ranks 0…7 MUST print the same sha
+model ready · trainable ~264M / 4.0B (6.5% · LoRA r=128)
+probe baseline: loss ~2–4
+[one silent pause of 1–4 min: XLA compiles every core]
+grad check ✔ 504 LoRA tensors received grads
+train: 60/60 …                          # ~1–3 s/step after compile
+selftest: adapter save→load ✅ equal
+✔ CPT done …
+```
+
+If the eight `init sha1` lines are **not all identical**, stop: the replica
+seeds diverged and the run would silently train eight different models. (The
+launcher seeds LoRA right before adapter creation; this line is the proof.)
+
+If the loss is `nan` or flat while LR is moving, stop and inspect. If you see
+`no LoRA gradients after the first backward`, checkpointing wiring failed — do
+not let it run.
+
+**The real run** (new cell, same session is fine):
+
+```python
+%run data/cpt_train.py
+```
+
+- 69,399 train blocks (512 held out) × 3 epochs → **1,084 steps/epoch · 3,252
+  steps total · 262k tokens/step ≈ 852M tokens**, ~9 h at the 27k tok/s planning
+  number (TPU quotas may end the session first — that is expected).
+- Checkpoints go to `ckpt/cpt/step_NNNNNN/` on HF roughly every 55 min and at
+  every probe (500 steps), with `latest.txt` updated last.
+- Ending early is safe. On a fresh session, rerun the **same command** with no
+  flags: it finds the newest complete checkpoint, loads adapter + optimizer,
+  fast-forwards the deterministic data stream to the exact row, and continues.
+- The final decay snapshots are averaged (soup), probed against the final
+  model, merged into bf16 on CPU, and banked to `models/cpt.v1/`.
+
+**If memory is tight** (each v5e chip has 16GB): rerun the pilot with
+`--rank 64` (≈132M trainable, ~0.8GB less optimizer state); `--rank 32` is the
+last resort. Keep gradient checkpointing on. `--attn eager` is *not* a memory
+fix on TPU — it materialises attention scores.
+
+**If `xmp.spawn` fails** on the Kaggle image, the env fix for
+`TPU_PROCESS_ADDRESSES` is already applied in the launcher. Last-resort debug
+path: `--single-core` (one core, ~8× slower — pilots only, not a full run).
+
+**Token hygiene.** The token is read from `HF_TOKEN` env → Kaggle Secrets →
+Colab userdata, never from the repo. Rotate the token you used during earlier
+debugging before starting the multi-hour run.
+
+---
+
 *Next up (Phase 4 theory):* how we turn the *other* ~480GB of banked text into the library — chunking, embeddings, hybrid search, and contextual chunk prefixes so retrieval "knows" which repo/file it's in.
