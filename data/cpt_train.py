@@ -308,6 +308,18 @@ def _check_wrapped(model, n_linear):
         raise SystemExit(1)
     log(f"peft: {len(wrapped)} lora matrices on {n_linear} Linear layers")
 
+def rewire_lora_trainable(model):
+    """XLA device moves can drop requires_grad — set it explicitly: only
+    lora_* params trainable, everything else frozen. Fails loudly if empty."""
+    for n, p in model.named_parameters():
+        p.requires_grad = "lora_" in n
+    n_tr = sum(p.numel() for _, p in model.named_parameters() if p.requires_grad)
+    if n_tr == 0:
+        heads = [f"{n}·{tuple(p.shape)}" for n, p in list(model.named_parameters())[:8]]
+        log("❌ 0 trainable params even after rewire — first pělěts:")
+        for h in heads: log(f"   {h}")
+        raise SystemExit(1)
+    log(f"requires_grad rewired · trainable {n_tr/1e6:,.0f}M (lora-only)")
 
 def build_model(rank):
     from peft import LoraConfig, get_peft_model
@@ -324,8 +336,9 @@ def build_model(rank):
         model = get_peft_model(model, cfg)
         _check_wrapped(model, n_lin)
         model = model.to(DEV)
-        for p in model.parameters():        # bf16 adapters → fits the 16GB cores
-            if p.requires_grad: p.data = p.data.to(torch.bfloat16)
+        rewire_lora_trainable(model)         # flags FIRST — XLA .to may drop them
+        for n, p in model.named_parameters():    # bf16 adapters (16GB-core math)
+            if "lora_" in n: p.data = p.data.to(torch.bfloat16)
     else:
         log(f"model: {BASE} · QLoRA nf4 · attn {attn} → cuda:0 …")
         _maybe_install(["bitsandbytes"])
@@ -347,8 +360,9 @@ def build_model(rank):
         from peft import prepare_model_for_kbit_training
         model = prepare_model_for_kbit_training(model,
                                                 use_gradient_checkpointing=True)
-        for p in model.parameters():        # fp16 adapters on the 4-bit base
-            if p.requires_grad: p.data = p.data.to(torch.float16)
+        rewire_lora_trainable(model)
+        for n, p in model.named_parameters():    # fp16 adapters on the 4-bit base
+            if "lora_" in n: p.data = p.data.to(torch.float16)
     if not getattr(model, "is_gradient_checkpointing", False) and not ARGS.no_ckpt:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False})
