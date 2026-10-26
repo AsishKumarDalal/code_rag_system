@@ -257,6 +257,6 @@ policy is the starting point GRPO improves; its exploration space is now the
 link — the provenance rule).
 
 **What I'll write when you say "go" on Phase 5:**
-`data/sft_build.py` (data leg — same contract style as `cpt_prep.py`) and
-`data/sft_train.py` (training leg — reusing the `cpt_train.py` skeleton:
+`sft/sft_build.py` (data leg — same contract style as `cpt/cpt_prep.py`) and
+`sft/sft_train.py` (training leg — reusing the `cpt/cpt_train.py` skeleton:
 WSD-style schedule replaced by cosine, same banking/resume/soupless herd).
