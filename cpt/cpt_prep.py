@@ -24,8 +24,8 @@ Resumability (same ground-truth pattern as stages 0/1):
 
 Run (Kaggle cell):
     !pip -q install -U "huggingface_hub>=0.23" datasets transformers
-    %run data/cpt_prep.py            # full run (~1-2 h CPU, no GPU needed)
-    %run data/cpt_prep.py --pilot 250000   # tiny test slice (~5 min)
+    %run cpt/cpt_prep.py            # full run (~1-2 h CPU, no GPU needed)
+    %run cpt/cpt_prep.py --pilot 250000   # tiny test slice (~5 min)
 
 Wall-clock cost is CPU/network only — the GPUs of Phase 3 are untouched.
 
@@ -736,7 +736,7 @@ def summary(failed):
         f"{M['evals']['canary_ok']} · eval-load failures "
         f"{M['evals']['failed'] or 'none'}")
     log(f"   elapsed {time.time()-T0:,.0f}s · manifest {MANIFEST}")
-    log("next → data/cpt_train.py (Phase 3 · CPT training)")
+    log("next → cpt/cpt_train.py (Phase 3 · CPT training)")
 
 def main():
     ap = argparse.ArgumentParser()

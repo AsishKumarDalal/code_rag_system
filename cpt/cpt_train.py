@@ -29,9 +29,9 @@ Backends (auto, --backend tpu|gpu to force):
 
 Run (Kaggle/Colab cell; on TPU a notebook cell auto-relaunches as a real
 python process because xmp.spawn cannot pickle functions from %run):
-    %run data/cpt_train.py --libs             # preflight only: versions
-    %run data/cpt_train.py --pilot 60         # smoke: 60 steps + save/reload test
-    %run data/cpt_train.py                    # the real run (TPU, ~9-12h)
+    %run cpt/cpt_train.py --libs             # preflight only: versions
+    %run cpt/cpt_train.py --pilot 60         # smoke: 60 steps + save/reload test
+    %run cpt/cpt_train.py                    # the real run (TPU, ~9-12h)
 
 First TPU step is slow — XLA compiles once per core (1-4 min, normal).
 ================================================================================
@@ -357,7 +357,7 @@ def _relaunch_if_notebook():
     f = globals().get("__file__")
     if not f or not Path(f).is_file():
         log("❌ cannot auto-relaunch (no script path). Run from a terminal cell:\n"
-            "   !python data/cpt_train.py --pilot 60")
+            "   !python cpt/cpt_train.py --pilot 60")
         raise SystemExit(1)
     script = Path(f).resolve()
     log("notebook cell → relaunching as a plain python process for xmp.spawn")
@@ -405,7 +405,7 @@ def load_manifest():
         m = json.loads(Path(p).read_text())
     except Exception as e:
         log(f"❌ cpt_manifest.json unreachable ({str(e)[:80]})")
-        log("   → run  %run data/cpt_prep.py  first (it banks the manifest)")
+        log("   → run  %run cpt/cpt_prep.py  first (it banks the manifest)")
         raise SystemExit(1)
     tree = repo_tree()
     def _blk_no(name):
@@ -420,7 +420,7 @@ def load_manifest():
             usable.append((name, blk[name]))
     if not usable:
         log("❌ no banked blocks found in the manifest — prep run incomplete")
-        log("   → rerun data/cpt_prep.py until all shards are uploaded")
+        log("   → rerun cpt/cpt_prep.py until all shards are uploaded")
         raise SystemExit(1)
     if len(usable) < len(names):
         log(f"⚠ {len(names) - len(usable)} shard(s) not on repo yet — "
@@ -1059,7 +1059,7 @@ def _run(args):
     MAX_STEPS = int(args.pilot) if args.pilot else planned
     if MAX_STEPS < 1:
         log(f"❌ stream too small ({per_epoch:,} rows → 0 steps). "
-            "Rerun data/cpt_prep.py to bank more blocks.")
+            "Rerun cpt/cpt_prep.py to bank more blocks.")
         raise SystemExit(1)
     WARM_STEPS = max(4, int(MAX_STEPS * WARM_FRAC))
     log(f"stream: {len(stream.shards)} shards · {stream.R:,} rows "

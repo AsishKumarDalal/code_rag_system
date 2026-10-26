@@ -348,8 +348,8 @@ six *_filtered repos (+ fineweb-edu replay)
 
 ```python
 %cd /kaggle/working/code_rag
-# %run data/cpt_train.py --libs          # optional: versions only
-%run data/cpt_train.py --pilot 60        # 60-step smoke test + save/reload proof
+# %run cpt/cpt_train.py --libs          # optional: versions only
+%run cpt/cpt_train.py --pilot 60        # 60-step smoke test + save/reload proof
 ```
 
 On a TPU runtime the cell **auto-relaunches as a plain `python` process**; that is
@@ -387,7 +387,7 @@ not let it run.
 **The real run** (new cell, same session is fine):
 
 ```python
-%run data/cpt_train.py
+%run cpt/cpt_train.py
 ```
 
 - 69,399 train blocks (512 held out) × 3 epochs → **1,084 steps/epoch · 3,252

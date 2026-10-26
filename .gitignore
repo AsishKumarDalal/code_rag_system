@@ -44,3 +44,5 @@ data/rag/
 # ── misc ───────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+# data/sft/ (banked to HF, not in git)
+data/sft/
